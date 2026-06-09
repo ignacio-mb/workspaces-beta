@@ -1,4 +1,4 @@
-# Dirty Data Sandbox
+# Workspaces Sandbox
 
 A throwaway **Metabase (Enterprise, `workspace-dev-instance-poc` branch)**
 instance with a deliberately messy sample database, for poking at the
