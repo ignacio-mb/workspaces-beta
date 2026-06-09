@@ -1,0 +1,141 @@
+# Metabase (EE, `workspace-dev-instance-poc` branch) sandbox for the mb-cli.
+#
+#   - warehouse-db   Postgres holding the "dirty" sample data (SHARED by both instances).
+#   - app-db         Postgres app state for the PROD instance.
+#   - metabase       PROD instance, port 3000 (owns the from-source image build).
+#   - app-db-dev     Postgres app state for the DEV instance        (profile: dev).
+#   - metabase-dev   DEV instance, port 3001, same image + data     (profile: dev).
+#
+# Both instances run a from-source EE build of the branch (no prebuilt image
+# exists for a feature branch). They share the warehouse data but keep separate
+# application databases (two instances cannot share one app-db).
+#
+# Build: ./build-branch.sh                   (git worktree of the branch + docker build)
+# Prod:  docker compose up -d && ./metabase/bootstrap.sh
+# Dev:   ./dev-up.sh                         (spins up + initialises the dev instance)
+# Down:  docker compose --profile dev down        (keep data)
+#        docker compose --profile dev down -v     (wipe everything)
+
+x-mb-env: &mb-env
+  MB_DB_TYPE: postgres
+  MB_DB_PORT: 5432
+  MB_DB_USER: metabase
+  MB_DB_PASS: metabase
+  JAVA_TIMEZONE: UTC
+  MB_PASSWORD_COMPLEXITY: weak
+  MB_LOAD_SAMPLE_CONTENT: "false"
+  MB_CHECK_FOR_UPDATES: "false"
+  MB_ANON_TRACKING_ENABLED: "false"
+  # `e2e` is the run mode that makes a JAR/Docker Metabase honor
+  # METASTORE_DEV_SERVER_URL for token checks (prod hard-pins the prod store;
+  # `dev` is for running from source). The URL MUST be a full URL with a scheme
+  # — if it's empty, EE concatenates "" + "/api/<token>/v2/status" and dies with
+  # "no protocol" (503) the moment a token is saved. Defaults to the STAGING
+  # token store; override via .env.
+  # EE still boots fine without a token; premium features (e.g. transforms)
+  # stay locked until MB_PREMIUM_EMBEDDING_TOKEN is set (provide it in .env —
+  # it is passed straight through, never stored in this file).
+  MB_RUN_MODE: e2e
+  MB_PREMIUM_EMBEDDING_TOKEN: ${MB_PREMIUM_EMBEDDING_TOKEN:-}
+  METASTORE_DEV_SERVER_URL: ${METASTORE_DEV_SERVER_URL:-https://token-check.staging.metabase.com}
+
+x-mb-healthcheck: &mb-healthcheck
+  test:
+    - CMD-SHELL
+    - >
+      curl -fsS http://localhost:3000/api/health
+      || wget -q -O- http://localhost:3000/api/health
+      || exit 1
+  interval: 3s
+  retries: 60
+  start_period: 30s
+
+# Both instances share one locally-built image, produced from the branch source
+# by the `metabase` service's build below (`./build-branch.sh`). Override
+# METABASE_IMAGE to use a registry tag instead (e.g. an enterprise-head image).
+x-metabase-base: &metabase-base
+  image: ${METABASE_IMAGE:-metabase-mb-cli:workspace-dev-instance-poc}
+  healthcheck: *mb-healthcheck
+
+x-app-db-base: &app-db-base
+  image: postgres:16-alpine
+  environment:
+    POSTGRES_USER: metabase
+    POSTGRES_PASSWORD: metabase
+    POSTGRES_DB: metabaseapp
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U metabase -d metabaseapp"]
+    interval: 2s
+    retries: 30
+
+services:
+  warehouse-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: analyst
+      POSTGRES_PASSWORD: analyst
+      POSTGRES_DB: warehouse
+    ports:
+      - "${WAREHOUSE_HOST_PORT:-5433}:5432"
+    volumes:
+      # *.sql in this directory runs once, on first init of an empty data volume.
+      - ./warehouse/init:/docker-entrypoint-initdb.d:ro
+      - warehouse-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U analyst -d warehouse"]
+      interval: 2s
+      retries: 30
+
+  app-db:
+    <<: *app-db-base
+    volumes:
+      - app-db-data:/var/lib/postgresql/data
+
+  metabase:
+    <<: *metabase-base
+    # Owns the from-source build of the shared image; metabase-dev reuses the
+    # resulting tag. METABASE_SRC is a git worktree of the branch.
+    build:
+      context: ${METABASE_SRC:-../../master/metabase-src-workspace-dev-instance-poc}
+      args:
+        MB_EDITION: ee
+        VERSION: ${MB_BUILD_VERSION:-v1.0.0-workspace-dev-instance-poc}
+    depends_on:
+      app-db:
+        condition: service_healthy
+      warehouse-db:
+        condition: service_healthy
+    ports:
+      - "${METABASE_HOST_PORT:-3000}:3000"
+    environment:
+      <<: *mb-env
+      MB_DB_HOST: app-db
+      MB_DB_DBNAME: metabaseapp
+      MB_SITE_NAME: Dirty Data Sandbox
+
+  app-db-dev:
+    <<: *app-db-base
+    profiles: ["dev"]
+    volumes:
+      - app-db-dev-data:/var/lib/postgresql/data
+
+  metabase-dev:
+    <<: *metabase-base
+    profiles: ["dev"]
+    depends_on:
+      app-db-dev:
+        condition: service_healthy
+      warehouse-db:
+        condition: service_healthy
+    ports:
+      - "${METABASE_DEV_HOST_PORT:-3001}:3000"
+    environment:
+      <<: *mb-env
+      MB_DB_HOST: app-db-dev
+      MB_DB_DBNAME: metabaseapp
+      MB_SITE_NAME: Dirty Data Sandbox (dev)
+
+volumes:
+  warehouse-data:
+  app-db-data:
+  app-db-dev-data:
