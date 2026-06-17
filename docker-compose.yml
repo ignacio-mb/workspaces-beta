@@ -54,7 +54,7 @@ x-mb-healthcheck: &mb-healthcheck
 # by the `metabase` service's build below (`./build-branch.sh`). Override
 # METABASE_IMAGE to use a registry tag instead (e.g. an enterprise-head image).
 x-metabase-base: &metabase-base
-  image: ${METABASE_IMAGE:-metabase-mb-cli:workspace-dev-instance-poc}
+  image: ${METABASE_IMAGE:-metabase-mb-cli:custom-data-apps-poc}
   healthcheck: *mb-healthcheck
 
 x-app-db-base: &app-db-base
@@ -96,10 +96,10 @@ services:
     # Owns the from-source build of the shared image; metabase-dev reuses the
     # resulting tag. METABASE_SRC is a git worktree of the branch.
     build:
-      context: ${METABASE_SRC:-../../master/metabase-src-workspace-dev-instance-poc}
+      context: ${METABASE_SRC:-../../master/metabase-src-custom-data-apps-poc}
       args:
         MB_EDITION: ee
-        VERSION: ${MB_BUILD_VERSION:-v1.0.0-workspace-dev-instance-poc}
+        VERSION: ${MB_BUILD_VERSION:-v1.0.0-custom-data-apps-poc}
     depends_on:
       app-db:
         condition: service_healthy
@@ -112,6 +112,10 @@ services:
       MB_DB_HOST: app-db
       MB_DB_DBNAME: metabaseapp
       MB_SITE_NAME: Dirty Data Sandbox
+    volumes:
+      # Bare git repo for Remote Sync (serves the data app from git); host==container
+      # path so the file:// URL is identical inside and outside the container.
+      - /Users/ignaciobeinesfurcada/dev/.prode/prode-sync.git:/Users/ignaciobeinesfurcada/dev/.prode/prode-sync.git
 
   app-db-dev:
     <<: *app-db-base

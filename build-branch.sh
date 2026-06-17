@@ -19,7 +19,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-BRANCH="workspace-dev-instance-poc"
+BRANCH="custom-data-apps-poc"
 REPO="${METABASE_REPO:-../../master/metabase}"
 SRC="${METABASE_SRC:-../../master/metabase-src-${BRANCH}}"
 TMP_BRANCH="tmp-build-${BRANCH}"

@@ -68,6 +68,59 @@ tables are shared. The dev instance is gated behind the compose `dev` profile, s
 a plain `docker compose up -d` only touches prod; `./dev-up.sh` (or
 `docker compose --profile dev up -d`) brings up dev.
 
+## Remote Sync
+
+**Remote Sync** is the EE feature that backs a workspace with a **git
+repository**. A workspace's content — collections, transforms, and **data apps**
+— is serialized into the repo (data apps live under `data_apps/<slug>/`, the rest
+as synced collection representations), so the workspace can be versioned, shared,
+and restored from git rather than living only inside one instance's app-db.
+
+How it relates to the two instances here: each Metabase instance keeps its
+*own* app-db (see [Two instances](#two-instances)), so content does **not** flow
+between prod and dev directly. Git is the bridge. One instance points at the repo
+in `read-write` mode and **pushes** its workspace there; the other points at the
+same repo in `read-only` mode and **imports** from it (optionally on a timer).
+That's how you move a data app from the instance you built it on to a clean one.
+The data app under `data_apps/` is built from the repo and served by Metabase, so
+whatever is committed is what gets rendered.
+
+In this sandbox only the **prod** `metabase` service is wired to a repo. The
+compose file bind-mounts a **bare** git repo into the container at a path
+identical to its host path:
+
+```yaml
+# docker-compose.yml → metabase.volumes
+- /Users/.../.prode/prode-sync.git:/Users/.../.prode/prode-sync.git
+```
+
+The host==container path is deliberate: Remote Sync addresses a local repo with a
+`file://` URL, and mounting it at the same path means that single URL resolves
+identically inside the container and on your machine (clone it, commit, inspect it
+from the host without translating paths). Adjust this path to wherever your bare
+repo lives — it is currently hardcoded to one machine. Create one with
+`git init --bare /path/to/sync.git`.
+
+### Setting it up
+
+Remote Sync URLs must be `file://`, `http://`, or `https://`. Configure it either
+in **Admin → Settings → Remote Sync** after boot, or up front via env vars in
+`.env` (all are env-readable; standard `MB_` + UPPER_SNAKE naming):
+
+| Env var                       | Setting              | Notes                                                        |
+| ----------------------------- | -------------------- | ------------------------------------------------------------ |
+| `MB_REMOTE_SYNC_URL`          | `remote-sync-url`    | repo location — `file:///Users/.../prode-sync.git` here      |
+| `MB_REMOTE_SYNC_BRANCH`       | `remote-sync-branch` | branch to sync, e.g. `main`                                  |
+| `MB_REMOTE_SYNC_TYPE`         | `remote-sync-type`   | `read-write` (push) or `read-only` (import); default read-only |
+| `MB_REMOTE_SYNC_AUTO_IMPORT`  | `remote-sync-auto-import` | read-only only — pull new commits automatically         |
+| `MB_REMOTE_SYNC_TOKEN`        | `remote-sync-token`  | bearer token for an `https://` repo; omit for `file://`      |
+
+Premium-token-gated like other EE features — set `MB_PREMIUM_EMBEDDING_TOKEN`
+(see [Enterprise features](#enterprise-features)) or the Remote Sync UI stays
+locked. A typical flow: point prod at the repo `read-write`, build/commit the
+data app, then point a fresh instance (e.g. dev — add the same volume mount and
+vars to `metabase-dev` in `docker-compose.yml`) at it `read-only` to import.
+
 ## The sample data
 
 One warehouse database, two Postgres schemas representing **two different
